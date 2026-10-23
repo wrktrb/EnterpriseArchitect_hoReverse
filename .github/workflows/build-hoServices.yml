@@ -1,0 +1,59 @@
+name: Build hoServices
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ master ]
+
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      - name: Checkout hoReverse (this fork, with the patch)
+        uses: actions/checkout@v4
+        with:
+          path: EnterpriseArchitect_hoReverse
+
+      - name: Checkout hoTools (needed for hoLinqToSql)
+        uses: actions/checkout@v4
+        with:
+          repository: Helmut-Ortmann/EnterpriseArchitect_hoTools
+          path: EnterpriseArchitect_hoTools
+
+      - name: Set up MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Provide Interop.EA.dll (bundled in the hoReverse repo)
+        shell: pwsh
+        run: |
+          $src = "EnterpriseArchitect_hoReverse\hoReverse_Setup\Lib\Interop.EA.dll"
+          foreach ($d in "C:\Program Files\Sparx Systems\EA",
+                         "C:\Program Files (x86)\Sparx Systems\EA",
+                         "D:\Program Files\Sparx Systems\EA") {
+            New-Item -ItemType Directory -Force $d | Out-Null
+            Copy-Item $src $d
+          }
+
+      - name: Drop packages that are not needed to compile
+        shell: pwsh
+        run: |
+          $p = "EnterpriseArchitect_hoTools\hoLinqToSql\hoLinqToSql.csproj"
+          $c = Get-Content -Raw $p
+          $c = $c -replace '(?s)\s*<PackageReference Include="(SampleDependency|SQLite\.Interop)">.*?</PackageReference>', ''
+          Set-Content -Path $p -Value $c -Encoding UTF8
+
+      - name: Build hoServices (Release, AnyCPU)
+        shell: pwsh
+        run: |
+          msbuild EnterpriseArchitect_hoReverse\hoServices\hoServices.csproj `
+            /restore /p:Configuration=Release /p:Platform=AnyCPU `
+            "/p:ReferencePath=$env:GITHUB_WORKSPACE\EnterpriseArchitect_hoReverse\hoReverse_Setup\Lib" `
+            /v:minimal
+
+      - name: Upload hoServices.dll
+        uses: actions/upload-artifact@v4
+        with:
+          name: hoServices
+          path: |
+            EnterpriseArchitect_hoReverse/hoServices/bin/Release/hoServices.dll
+            EnterpriseArchitect_hoReverse/hoServices/bin/Release/hoServices.pdb
