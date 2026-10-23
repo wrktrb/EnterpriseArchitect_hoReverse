@@ -27,6 +27,9 @@ namespace EaServices.Doors.ReqIfs
         // Handler embedded files
         private ExportEmbeddedEaFiles _exportEmbeddedEaFile;
 
+        // ExportMappingList: ReqIF attributes filled from EA element properties (e.g. "MyStatus=EA.Status")
+        private ExportFields _exportMapping;
+
         /// <inheritdoc />
         public ReqIfExport(EA.Repository rep, EA.Package pkg, string importFile, FileImportSettingsItem settings) :
             base(rep, pkg, importFile, settings)
@@ -72,6 +75,7 @@ namespace EaServices.Doors.ReqIfs
             _prefixTv = "";
             _errorMessage1 = false;
             _exportFields = new ExportFields(Settings.WriteAttrNameList);
+            _exportMapping = new ExportFields(GetExportMappings());
 
             // Write header, delete file if first package
             ReqIfDeserialized = AddHeader(ImportModuleFile, newFile:subModuleIndex==0);
@@ -93,6 +97,32 @@ namespace EaServices.Doors.ReqIfs
 
 
         }
+        /// <summary>
+        /// Get the valid entries of 'ExportMappingList' ("AttributeName=EA.Property").
+        /// Entries whose attribute name starts with 'ReqIF.' are ignored, these ReqIF standard
+        /// attributes are written by hoReverse itself.
+        /// </summary>
+        /// <returns></returns>
+        private System.Collections.Generic.List<string> GetExportMappings()
+        {
+            return Settings.ExportMappingList
+                .Select(x => x.Trim().TrimEnd(';'))
+                .Where(x =>
+                {
+                    var parts = x.Split('=');
+                    return parts.Length == 2 &&
+                           !String.IsNullOrWhiteSpace(parts[0]) &&
+                           !parts[0].Trim().StartsWith("ReqIF.") &&
+                           parts[1].Trim().StartsWith("EA.");
+                })
+                .Select(x =>
+                {
+                    var parts = x.Split('=');
+                    return $"{parts[0].Trim()}={parts[1].Trim()}";
+                })
+                .ToList();
+        }
+
         /// <summary>
         /// Create Specification with hierarchy
         /// </summary>
@@ -269,6 +299,23 @@ namespace EaServices.Doors.ReqIfs
                                 specObject.Values.Add(attributeValueXhtml);
                             }
 
+                            // Attributes from ExportMappingList (EA properties like EA.Status, EA.Type, EA.Stereotype)
+                            if (el != null)
+                            {
+                                foreach (string mappedName in _exportMapping.GetFields())
+                                {
+                                    attributeValueXhtml = new AttributeValueXHTML
+                                    {
+                                        Definition =
+                                            (AttributeDefinitionXHTML) _specObjectType.SpecAttributes.First(x =>
+                                                x.GetType() == typeof(AttributeDefinitionXHTML) &&
+                                                x.LongName == mappedName),
+                                        TheValue = MakeXhtmlFromString(_exportMapping.GetMacroValue(el, mappedName))
+                                    };
+                                    specObject.Values.Add(attributeValueXhtml);
+                                }
+                            }
+
 
                             // Attribute Text (note or Linked Document)
                             // _settings.SpecHandling
@@ -345,7 +392,8 @@ Req Guid: '{el?.ElementGUID}'
 
                     //--------------------------------------------------------------------------------------
                     // Add Tagged Value if defined
-                    if (! String.IsNullOrWhiteSpace(r.TvName) && ! r.TvName.StartsWith("ReqIF."))
+                    if (! String.IsNullOrWhiteSpace(r.TvName) && ! r.TvName.StartsWith("ReqIF.") &&
+                        ! _exportMapping.IsWritableValue(r.TvName))
                     {
                         string tvName = r.TvName;
                         // Handle repeated tagged value name
@@ -666,6 +714,20 @@ All EA Tagged Values starting with 'ReqIF.' are skipped!", @"Don't use ReqIF sta
             };
             _specObjectType.SpecAttributes.Add(attributeDefinitionString);
 
+            // Attributes from ExportMappingList (EA properties like EA.Status, EA.Type, EA.Stereotype)
+            foreach (string mappedName in _exportMapping.GetFields())
+            {
+                attributeDefinitionXhtml = new AttributeDefinitionXHTML
+                {
+                    LongName = mappedName,
+                    Identifier = ReqIfUtils.MakeReqIfId(ReqIfUtils.ReqIfIdType.Attribute, pkg.Name, mappedName),
+                    LastChange = DateTime.Now,
+                    Type = (DatatypeDefinitionXHTML)_reqIfContent.DataTypes.SingleOrDefault(x =>
+                        x.GetType() == typeof(DatatypeDefinitionXHTML))
+                };
+                _specObjectType.SpecAttributes.Add(attributeDefinitionXhtml);
+            }
+
 
             using (var db = new EaDataModel(LinqOptions))
             {
@@ -686,6 +748,8 @@ All EA Tagged Values starting with 'ReqIF.' are skipped!", @"Don't use ReqIF sta
                                                                                                                         && x.LongName == tvName);
                     // no ReqIF Standard-Attributes as Tagged Values 
                     if (tvName.StartsWith("ReqIF.")) continue;
+                    // EA property from ExportMappingList has priority over a Tagged Value with the same name
+                    if (_exportMapping.IsWritableValue(tvName)) continue;
                     if (dataTypeEnumeration == null)
                     {
 
