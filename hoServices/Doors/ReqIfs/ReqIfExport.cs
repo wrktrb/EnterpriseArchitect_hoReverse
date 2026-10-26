@@ -30,6 +30,23 @@ namespace EaServices.Doors.ReqIfs
         // ExportMappingList: ReqIF attributes filled from EA element properties (e.g. "MyStatus=EA.Status")
         private ExportFields _exportMapping;
 
+        // Macro to export the text of all Notes linked to an element (EA NoteLink)
+        private const string MacroLinkedNotes = "EA.LinkedNotes";
+        // Macros to export the GUIDs of related elements (traceability)
+        // - EA.TraceTo:   Elements the current element traces to   (current element = source of «trace»)
+        // - EA.TraceFrom: Elements which trace to the current element (current element = target of «trace»)
+        // - EA.LinksTo:   Like EA.TraceTo,   but all connector types (except NoteLink)
+        // - EA.LinksFrom: Like EA.TraceFrom, but all connector types (except NoteLink)
+        private const string MacroTraceTo = "EA.TraceTo";
+        private const string MacroTraceFrom = "EA.TraceFrom";
+        private const string MacroLinksTo = "EA.LinksTo";
+        private const string MacroLinksFrom = "EA.LinksFrom";
+        // Macros to export the elements linked by a «trace» relationship (both directions)
+        private const string MacroTraceIds = "EA.TraceIds";       // EA Element ID, e.g. "123, 456"
+        private const string MacroTraceGuids = "EA.TraceGuids";   // EA GUID
+        // true: Note elements are exported as attribute of the linked element, not as own requirement
+        private bool _skipNoteElements;
+
         /// <inheritdoc />
         public ReqIfExport(EA.Repository rep, EA.Package pkg, string importFile, FileImportSettingsItem settings) :
             base(rep, pkg, importFile, settings)
@@ -76,6 +93,7 @@ namespace EaServices.Doors.ReqIfs
             _errorMessage1 = false;
             _exportFields = new ExportFields(Settings.WriteAttrNameList);
             _exportMapping = new ExportFields(GetExportMappings());
+            _skipNoteElements = _exportMapping.GetFields().Any(x => _exportMapping.GetMacroName(x) == MacroLinkedNotes);
 
             // Write header, delete file if first package
             ReqIfDeserialized = AddHeader(ImportModuleFile, newFile:subModuleIndex==0);
@@ -124,6 +142,150 @@ namespace EaServices.Doors.ReqIfs
         }
 
         /// <summary>
+        /// Get the text of all Notes linked to the element by an EA NoteLink, as EA notes format.
+        /// Several Notes are separated by an empty line.
+        /// </summary>
+        /// <param name="el"></param>
+        /// <returns></returns>
+        private string GetLinkedNotes(EA.Element el)
+        {
+            var notes = new System.Collections.Generic.List<string>();
+            var seen = new System.Collections.Generic.HashSet<int>();
+            foreach (EA.Connector con in el.Connectors)
+            {
+                if (con.Type != "NoteLink") continue;
+                int otherId = con.ClientID == el.ElementID ? con.SupplierID : con.ClientID;
+                if (otherId == el.ElementID || !seen.Add(otherId)) continue;
+                EA.Element other;
+                try
+                {
+                    other = Rep.GetElementByID(otherId);
+                }
+                catch
+                {
+                    continue;
+                }
+                if (other == null || String.IsNullOrWhiteSpace(other.Notes)) continue;
+                notes.Add(other.Notes.Trim());
+            }
+            return String.Join("\r\n\r\n", notes);
+        }
+
+        /// <summary>
+        /// Get the elements linked to 'el' by a «trace» relationship (incoming and outgoing).
+        /// EA models a trace as Abstraction with stereotype 'trace'.
+        /// Returns the IDs or GUIDs separated by ', ', sorted by Element ID.
+        /// </summary>
+        /// <param name="el"></param>
+        /// <param name="useGuid"></param>
+        /// <returns></returns>
+        private string GetTraceElements(EA.Element el, bool useGuid)
+        {
+            var ids = new System.Collections.Generic.SortedSet<int>();
+            foreach (EA.Connector con in el.Connectors)
+            {
+                if (!IsTrace(con)) continue;
+                int otherId = con.ClientID == el.ElementID ? con.SupplierID : con.ClientID;
+                if (otherId != el.ElementID && otherId > 0) ids.Add(otherId);
+            }
+            if (!useGuid) return String.Join(", ", ids);
+
+            var guids = new System.Collections.Generic.List<string>();
+            foreach (int id in ids)
+            {
+                try
+                {
+                    var other = Rep.GetElementByID(id);
+                    if (other != null) guids.Add(other.ElementGUID);
+                }
+                catch
+                {
+                    // element not available, skip
+                }
+            }
+            return String.Join(", ", guids);
+        }
+
+        /// <summary>
+        /// Check if the connector is a «trace» (EA Abstraction/Dependency with stereotype 'trace', SysML Trace,..)
+        /// </summary>
+        /// <param name="con"></param>
+        /// <returns></returns>
+        private static bool IsTrace(EA.Connector con)
+        {
+            if (String.Equals(con.Type, "Trace", StringComparison.OrdinalIgnoreCase)) return true;
+            if (String.Equals(con.Stereotype, "trace", StringComparison.OrdinalIgnoreCase)) return true;
+            return (con.StereotypeEx ?? "")
+                .Split(',')
+                .Select(x => x.Contains("::") ? x.Substring(x.LastIndexOf("::", StringComparison.Ordinal) + 2) : x)
+                .Any(x => String.Equals(x.Trim(), "trace", StringComparison.OrdinalIgnoreCase));
+        }
+
+        /// <summary>
+        /// Get the GUIDs of related elements, one GUID per line, sorted.
+        /// </summary>
+        /// <param name="el">Current element</param>
+        /// <param name="outgoing">true: current element is source (client), false: current element is target (supplier)</param>
+        /// <param name="onlyTrace">true: only «trace» connectors, false: all connectors except NoteLink</param>
+        /// <returns></returns>
+        private string GetRelatedGuids(EA.Element el, bool outgoing, bool onlyTrace)
+        {
+            var guids = new System.Collections.Generic.SortedSet<string>();
+            foreach (EA.Connector con in el.Connectors)
+            {
+                if (con.Type == "NoteLink") continue;
+                if (onlyTrace && !IsTrace(con)) continue;
+                int sourceId = con.ClientID;
+                int targetId = con.SupplierID;
+                if (sourceId == targetId) continue;
+                if (outgoing && sourceId != el.ElementID) continue;
+                if (!outgoing && targetId != el.ElementID) continue;
+                int otherId = outgoing ? targetId : sourceId;
+                try
+                {
+                    var other = Rep.GetElementByID(otherId);
+                    if (other != null) guids.Add(other.ElementGUID);
+                }
+                catch
+                {
+                    // ignore connectors to not existing elements
+                }
+            }
+            return String.Join(", ", guids);
+        }
+
+        /// <summary>
+        /// Get the ReqIF XHTML value of an ExportMappingList attribute
+        /// </summary>
+        /// <param name="el"></param>
+        /// <param name="mappedName"></param>
+        /// <returns></returns>
+        private string GetMappedXhtmlValue(EA.Element el, string mappedName)
+        {
+            switch (_exportMapping.GetMacroName(mappedName))
+            {
+                case MacroLinkedNotes:
+                    string notes = GetLinkedNotes(el);
+                    return String.IsNullOrEmpty(notes)
+                        ? MakeXhtmlFromString("")
+                        : MakeXhtmlFromEaNotes(Rep, notes);
+                case MacroTraceIds:
+                    return MakeXhtmlFromString(GetTraceElements(el, useGuid: false));
+                case MacroTraceGuids:
+                    return MakeXhtmlFromString(GetTraceElements(el, useGuid: true));
+                case MacroTraceTo:
+                    return MakeXhtmlFromString(GetRelatedGuids(el, outgoing: true, onlyTrace: true));
+                case MacroTraceFrom:
+                    return MakeXhtmlFromString(GetRelatedGuids(el, outgoing: false, onlyTrace: true));
+                case MacroLinksTo:
+                    return MakeXhtmlFromString(GetRelatedGuids(el, outgoing: true, onlyTrace: false));
+                case MacroLinksFrom:
+                    return MakeXhtmlFromString(GetRelatedGuids(el, outgoing: false, onlyTrace: false));
+            }
+            return MakeXhtmlFromString(_exportMapping.GetMacroValue(el, mappedName));
+        }
+
+        /// <summary>
         /// Create Specification with hierarchy
         /// </summary>
         private bool CreateSpecHierarchy()
@@ -131,6 +293,7 @@ namespace EaServices.Doors.ReqIfs
             var parent = _moduleSpecification;
             foreach (EA.Element el in Pkg.Elements)
             {
+                if (_skipNoteElements && el.Type == "Note") continue;
                 var idSpecObject = ReqIfUtils.MakeReqIfId(ReqIfUtils.ReqIfIdType.SpecObject, ReqIfUtils.IdFromGuid(el.ElementGUID));
                 var specObject =_reqIfContent.SpecObjects.SingleOrDefault(x => x.Identifier == idSpecObject);
                 var specHierarchy = new SpecHierarchy()
@@ -155,6 +318,7 @@ namespace EaServices.Doors.ReqIfs
         /// <param name="el"></param>
         private void CreateSpecHierarchyElement(SpecHierarchy parent, EA.Element el)
         {
+            if (_skipNoteElements && el.Type == "Note") return;
             var idSpecObject = ReqIfUtils.MakeReqIfId(ReqIfUtils.ReqIfIdType.SpecObject, ReqIfUtils.IdFromGuid(el.ElementGUID));
             //var idSpecObject = ReqI$"specObj{ReqIfUtils.IdFromGuid(el.ElementGUID)}";
             var specObject = _reqIfContent.SpecObjects.SingleOrDefault(x => x.Identifier == idSpecObject);
@@ -184,7 +348,8 @@ namespace EaServices.Doors.ReqIfs
                 // Read all Requirements for module/specification
                 var reqs = (from r in db.t_object
                             join pkg in db.t_package on r.Package_ID equals pkg.Package_ID
-                            where pkg.ea_guid == Pkg.PackageGUID
+                            where pkg.ea_guid == Pkg.PackageGUID &&
+                                  !(_skipNoteElements && r.Object_Type == "Note")
                             from tv in db.t_objectproperties.Where(tv2 => r.Object_ID == tv2.Object_ID)
                                 .DefaultIfEmpty() // <<= makes join left join
                             orderby r.ea_guid, tv.Property // ensure requirements are on a stretch
@@ -310,7 +475,7 @@ namespace EaServices.Doors.ReqIfs
                                             (AttributeDefinitionXHTML) _specObjectType.SpecAttributes.First(x =>
                                                 x.GetType() == typeof(AttributeDefinitionXHTML) &&
                                                 x.LongName == mappedName),
-                                        TheValue = MakeXhtmlFromString(_exportMapping.GetMacroValue(el, mappedName))
+                                        TheValue = GetMappedXhtmlValue(el, mappedName)
                                     };
                                     specObject.Values.Add(attributeValueXhtml);
                                 }
