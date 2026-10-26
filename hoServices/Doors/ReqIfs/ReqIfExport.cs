@@ -44,6 +44,15 @@ namespace EaServices.Doors.ReqIfs
         // Macros to export the elements linked by a «trace» relationship (both directions)
         private const string MacroTraceIds = "EA.TraceIds";       // EA Element ID, e.g. "123, 456"
         private const string MacroTraceGuids = "EA.TraceGuids";   // EA GUID
+        // Macros to export the elements the current element is nested in (EA ParentID)
+        // - EA.ParentGuid:  GUID of the direct parent element (empty if the element is directly in the package)
+        // - EA.ParentName:  Name of the direct parent element
+        // - EA.ParentGuids: GUIDs of all parent elements, outermost first
+        // - EA.ParentPath:  Names of all parent elements, outermost first, e.g. "System / Subsystem / Function"
+        private const string MacroParentGuid = "EA.ParentGuid";
+        private const string MacroParentName = "EA.ParentName";
+        private const string MacroParentGuids = "EA.ParentGuids";
+        private const string MacroParentPath = "EA.ParentPath";
         // true: Note elements are exported as attribute of the linked element, not as own requirement
         private bool _skipNoteElements;
 
@@ -196,7 +205,7 @@ namespace EaServices.Doors.ReqIfs
                 try
                 {
                     var other = Rep.GetElementByID(id);
-                    if (other != null) guids.Add(other.ElementGUID);
+                    if (other != null) guids.Add(GuidWithoutBraces(other.ElementGUID));
                 }
                 catch
                 {
@@ -244,7 +253,7 @@ namespace EaServices.Doors.ReqIfs
                 try
                 {
                     var other = Rep.GetElementByID(otherId);
-                    if (other != null) guids.Add(other.ElementGUID);
+                    if (other != null) guids.Add(GuidWithoutBraces(other.ElementGUID));
                 }
                 catch
                 {
@@ -252,6 +261,45 @@ namespace EaServices.Doors.ReqIfs
                 }
             }
             return String.Join(", ", guids);
+        }
+
+        /// <summary>
+        /// Get all elements the element is nested in (EA ParentID), outermost first.
+        /// Packages are not included.
+        /// </summary>
+        /// <param name="el"></param>
+        /// <returns></returns>
+        private System.Collections.Generic.List<EA.Element> GetParentElements(EA.Element el)
+        {
+            var parents = new System.Collections.Generic.List<EA.Element>();
+            var seen = new System.Collections.Generic.HashSet<int> { el.ElementID };
+            int parentId = el.ParentID;
+            while (parentId > 0 && seen.Add(parentId))
+            {
+                EA.Element parent;
+                try
+                {
+                    parent = Rep.GetElementByID(parentId);
+                }
+                catch
+                {
+                    break;
+                }
+                if (parent == null) break;
+                parents.Insert(0, parent);
+                parentId = parent.ParentID;
+            }
+            return parents;
+        }
+
+        /// <summary>
+        /// EA GUID without the curly braces: "{4A0F...}" => "4A0F..."
+        /// </summary>
+        /// <param name="guid"></param>
+        /// <returns></returns>
+        private static string GuidWithoutBraces(string guid)
+        {
+            return (guid ?? "").Trim().TrimStart('{').TrimEnd('}');
         }
 
         /// <summary>
@@ -281,6 +329,16 @@ namespace EaServices.Doors.ReqIfs
                     return MakeXhtmlFromString(GetRelatedGuids(el, outgoing: true, onlyTrace: false));
                 case MacroLinksFrom:
                     return MakeXhtmlFromString(GetRelatedGuids(el, outgoing: false, onlyTrace: false));
+                case "EA.GUID":
+                    return MakeXhtmlFromString(GuidWithoutBraces(el.ElementGUID));
+                case MacroParentGuid:
+                    return MakeXhtmlFromString(GetParentElements(el).Select(x => GuidWithoutBraces(x.ElementGUID)).LastOrDefault() ?? "");
+                case MacroParentName:
+                    return MakeXhtmlFromString(GetParentElements(el).Select(x => x.Name).LastOrDefault() ?? "");
+                case MacroParentGuids:
+                    return MakeXhtmlFromString(String.Join(", ", GetParentElements(el).Select(x => GuidWithoutBraces(x.ElementGUID))));
+                case MacroParentPath:
+                    return MakeXhtmlFromString(String.Join(" / ", GetParentElements(el).Select(x => x.Name)));
             }
             return MakeXhtmlFromString(_exportMapping.GetMacroValue(el, mappedName));
         }
@@ -402,7 +460,7 @@ namespace EaServices.Doors.ReqIfs
                                     (AttributeDefinitionString) _specObjectType.SpecAttributes.First(x =>
                                         x.GetType() == typeof(AttributeDefinitionString) &&
                                         x.LongName == "ReqIF.ForeignId"),
-                                TheValue = r.Guid
+                                TheValue = GuidWithoutBraces(r.Guid)
                             };
                             specObject.Values.Add(attributeValueString);
                             
