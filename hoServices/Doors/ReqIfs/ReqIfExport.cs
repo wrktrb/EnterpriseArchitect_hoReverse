@@ -544,6 +544,27 @@ namespace EaServices.Doors.ReqIfs
         }
 
         /// <summary>
+        /// Name of the SpecObjectType (requirement type). Tools like StrictDoc use it as element name,
+        /// StrictDoc only accepts uppercase letters and '_' ([A-Z]+(_[A-Z]+)*), no digits.
+        /// - Setting 'SpecObjectTypeName' if defined (also made safe)
+        /// - Otherwise the package name made safe, e.g. "C4G-C1" => "C_G_C"
+        /// - "REQUIREMENT" if nothing remains
+        /// </summary>
+        /// <param name="pkg"></param>
+        /// <returns></returns>
+        private string MakeSpecObjectTypeName(EA.Package pkg)
+        {
+            string name = String.IsNullOrWhiteSpace(Settings.SpecObjectTypeName)
+                ? pkg.Name
+                : Settings.SpecObjectTypeName;
+            name = Regex.Replace((name ?? "").ToUpperInvariant(), "[^A-Z]+", "_").Trim('_');
+            if (name == "") return "REQUIREMENT";
+            // StrictDoc reserved keywords
+            if (name == "DOCUMENT" || name == "GRAMMAR") return $"{name}_REQUIREMENT";
+            return name;
+        }
+
+        /// <summary>
         /// Create Specification with hierarchy
         /// </summary>
         private bool CreateSpecHierarchy()
@@ -1089,10 +1110,11 @@ All EA Tagged Values starting with 'ReqIF.' are skipped!", @"Don't use ReqIF sta
         // ReSharper disable once UnusedParameter.Local
         private void AddSpeObjectTypeForModule(ReqIF reqIf, EA.Package pkg)
         {
+            // see MakeSpecObjectTypeName below
             // SpecObjType of package/module
             _specObjectType = new SpecObjectType
             {
-                LongName = $"{pkg.Name}",
+                LongName = MakeSpecObjectTypeName(pkg),
                 Identifier = $"specObjT{ReqIfUtils.IdFromGuid(pkg.PackageGUID)}",
                 LastChange = DateTime.Now
                };
