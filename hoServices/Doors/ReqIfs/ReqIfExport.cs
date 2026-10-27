@@ -54,7 +54,7 @@ namespace EaServices.Doors.ReqIfs
         private const string MacroParentGuids = "EA.ParentGuids";
         private const string MacroParentPath = "EA.ParentPath";
         // PackageIDs to export: the package, and with 'IncludeSubPackages' all sub-packages (recursive)
-        private System.Collections.Generic.List<int> _packageIds = new System.Collections.Generic.List<int>();
+        private System.Collections.Generic.List<long> _packageIds = new System.Collections.Generic.List<long>();
         // true: Note elements are exported as attribute of the linked element, not as own requirement
         private bool _skipNoteElements;
 
@@ -105,7 +105,7 @@ namespace EaServices.Doors.ReqIfs
             _exportFields = new ExportFields(Settings.WriteAttrNameList);
             _exportMapping = new ExportFields(GetExportMappings());
             _skipNoteElements = _exportMapping.GetFields().Any(x => _exportMapping.GetMacroName(x) == MacroLinkedNotes);
-            _packageIds = new System.Collections.Generic.List<int>();
+            _packageIds = new System.Collections.Generic.List<long>();
             CollectPackageIds(Pkg, _packageIds, Settings.IncludeSubPackages);
 
             // Write header, delete file if first package
@@ -521,7 +521,7 @@ namespace EaServices.Doors.ReqIfs
         /// <param name="pkg"></param>
         /// <param name="ids"></param>
         /// <param name="recursive"></param>
-        private static void CollectPackageIds(EA.Package pkg, System.Collections.Generic.List<int> ids, bool recursive)
+        private static void CollectPackageIds(EA.Package pkg, System.Collections.Generic.List<long> ids, bool recursive)
         {
             if (ids.Contains(pkg.PackageID)) return;
             ids.Add(pkg.PackageID);
