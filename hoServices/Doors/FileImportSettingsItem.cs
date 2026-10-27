@@ -109,6 +109,13 @@ namespace EaServices.Doors
         [JsonProperty("IncludeSubPackages"), DefaultValue(false)]
         public bool IncludeSubPackages { get; set; }
 
+        /// <summary>
+        /// Export: Append the EA scenarios (e.g. of Use Cases) with their steps to 'ReqIF.Text'
+        /// - False (default): No scenarios
+        /// </summary>
+        [JsonProperty("ExportScenarios"), DefaultValue(false)]
+        public bool ExportScenarios { get; set; }
+
 
         /// <summary>
         /// Allowed operations according to <see cref="AllowedOperationsType"/>
