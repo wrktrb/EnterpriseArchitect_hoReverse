@@ -312,6 +312,70 @@ namespace EaServices.Doors.ReqIfs
         }
 
         /// <summary>
+        /// Make HTML of all scenarios of the element (Use Case scenarios), e.g.:
+        /// Basic Path: Order product
+        ///   notes
+        ///   1. [Context] User selects product
+        ///   2. [System] System shows price (Alternate 2a: Product not available)
+        /// Returns "" if the element has no scenarios.
+        /// </summary>
+        /// <param name="el"></param>
+        /// <returns></returns>
+        private string MakeScenarioHtml(EA.Element el)
+        {
+            try
+            {
+                if (el.Scenarios == null || el.Scenarios.Count == 0) return "";
+                var sb = new System.Text.StringBuilder();
+                sb.Append("<p><b>Scenarios</b></p>");
+                foreach (EA.Scenario scenario in el.Scenarios)
+                {
+                    string title = String.IsNullOrWhiteSpace(scenario.Type)
+                        ? scenario.Name
+                        : $"{scenario.Type}: {scenario.Name}";
+                    sb.Append($"<p><b>{HtmlEncode(title)}</b></p>");
+                    if (!String.IsNullOrWhiteSpace(scenario.Notes))
+                        sb.Append(Rep.GetFormatFromField("HTML", scenario.Notes));
+
+                    var steps = new System.Collections.Generic.List<EA.ScenarioStep>();
+                    foreach (EA.ScenarioStep step in scenario.Steps) steps.Add(step);
+                    if (steps.Count == 0) continue;
+
+                    sb.Append("<ol>");
+                    foreach (var step in steps.OrderBy(x => x.Pos))
+                    {
+                        string who = step.StepType.ToString().IndexOf("Actor", StringComparison.OrdinalIgnoreCase) >= 0
+                            ? "Context"
+                            : "System";
+                        var text = new System.Text.StringBuilder($"[{who}] {HtmlEncode(step.Name)}");
+                        if (!String.IsNullOrWhiteSpace(step.Uses)) text.Append($"<br/>Uses: {HtmlEncode(step.Uses)}");
+                        if (!String.IsNullOrWhiteSpace(step.Results)) text.Append($"<br/>Results: {HtmlEncode(step.Results)}");
+                        if (!String.IsNullOrWhiteSpace(step.State)) text.Append($"<br/>State: {HtmlEncode(step.State)}");
+                        foreach (EA.ScenarioExtension ext in step.Extensions)
+                        {
+                            text.Append($"<br/>Extension {HtmlEncode(ext.Level)}: {HtmlEncode(ext.Name)}");
+                        }
+                        sb.Append($"<li>{text}</li>");
+                    }
+                    sb.Append("</ol>");
+                }
+                return sb.ToString();
+            }
+            catch (Exception e)
+            {
+                MessageBox.Show($@"Element: '{el.Name}'
+
+{e}", @"Error exporting scenarios, scenarios skipped");
+                return "";
+            }
+        }
+
+        private static string HtmlEncode(string text)
+        {
+            return System.Net.WebUtility.HtmlEncode((text ?? "").Trim()).Replace("\r\n", "<br/>").Replace("\n", "<br/>");
+        }
+
+        /// <summary>
         /// Get the ReqIF XHTML value of an ExportMappingList attribute
         /// </summary>
         /// <param name="el"></param>
@@ -709,6 +773,8 @@ namespace EaServices.Doors.ReqIfs
                             // - FileImportSettingsItem.SpecHandlingType.OnlyNotes
 
                             string rtfText = el?.GetLinkedDocument();
+                            // Scenarios (Use Case) as HTML, appended to ReqIF.Text
+                            string scenarioHtml = Settings.ExportScenarios && el != null ? MakeScenarioHtml(el) : "";
                             var definition = (AttributeDefinitionXHTML) _specObjectType.SpecAttributes.First(
                                 x =>
                                     x.GetType() == typeof(AttributeDefinitionXHTML) && x.LongName == "ReqIF.Text");
@@ -726,7 +792,7 @@ namespace EaServices.Doors.ReqIfs
 
                                 // Handle embedded files of the EA-Element
                                 xhtml = $@"{xhtml}
-{_exportEmbeddedEaFile.MakeXhtmlForEmbeddedFiles(el)}";
+{_exportEmbeddedEaFile.MakeXhtmlForEmbeddedFiles(el)}{scenarioHtml}";
 
                                 // Text = Linked Document
                                 attributeValueXhtml = new AttributeValueXHTML
@@ -741,17 +807,18 @@ namespace EaServices.Doors.ReqIfs
                             {
                                 // Check export EA Notes
                                 // No rtf export and Mixed Mode or OnlyNotes
-                                if (!String.IsNullOrEmpty(r.Desc) &&
+                                bool exportNotes = !String.IsNullOrEmpty(r.Desc) &&
                                     (Settings.SpecHandling == FileImportSettingsItem.SpecHandlingType.MixedMode ||
                                      Settings.SpecHandling == FileImportSettingsItem.SpecHandlingType.OnlyNotes
-                                    )
-                                )
+                                    );
+                                if (exportNotes || scenarioHtml != "")
                                 {
-                                    // Text = notes.
+                                    // Text = notes (+ scenarios)
+                                    string html = (exportNotes ? Rep.GetFormatFromField("HTML", r.Desc) : "") + scenarioHtml;
                                     attributeValueXhtml = new AttributeValueXHTML
                                     {
                                         Definition = definition,
-                                        TheValue = MakeXhtmlFromEaNotes(Rep, r.Desc)
+                                        TheValue = MakeXhtmlFromHtml(html)
                                     };
                                     specObject.Values.Add(attributeValueXhtml);
                                 }

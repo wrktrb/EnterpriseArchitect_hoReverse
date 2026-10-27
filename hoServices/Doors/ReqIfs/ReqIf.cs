@@ -231,13 +231,13 @@ Validate: true
             text = text.Replace("&nbsp;", "");
             text = text.Replace("&nbsp;", "");
             text = text.Replace("Ü", "&#220;");
-            text = text.Replace("Ä", "&#197;");
+            text = text.Replace("Ä", "&#196;");
             text = text.Replace("Ö", "&#214;");
             text = text.Replace("ü", "&#252;");
             text = text.Replace("ä", "&#228;");
             text = text.Replace("ö", "&#246;");
             text = text.Replace("&Uuml;", "&#220;");
-            text = text.Replace("&Auml;", "&#197;");
+            text = text.Replace("&Auml;", "&#196;");
             text = text.Replace("&Ouml;", "&#214;");
             text = text.Replace("&uuml;", "&#252;");
             text = text.Replace("&auml;", "&#228;");
@@ -303,7 +303,7 @@ Validate: true
             stringValue = stringValue.Replace("\r\n", "<br/>");
             stringValue = stringValue.Replace("&nbsp;", "");
             stringValue = stringValue.Replace("Ü", "&#220;");
-            stringValue = stringValue.Replace("Ä", "&#197;");
+            stringValue = stringValue.Replace("Ä", "&#196;");
             stringValue = stringValue.Replace("Ö", "&#214;");
             stringValue = stringValue.Replace("ü", "&#252;");
             stringValue = stringValue.Replace("ä", "&#228;");
@@ -312,7 +312,7 @@ Validate: true
 
 
             stringValue = stringValue.Replace("&Uuml;", "&#220;");
-            stringValue = stringValue.Replace("&Auml;", "&#197;");
+            stringValue = stringValue.Replace("&Auml;", "&#196;");
             stringValue = stringValue.Replace("&Ouml;", "&#214;");
             stringValue = stringValue.Replace("&uuml;", "&#252;");
             stringValue = stringValue.Replace("&auml;", "&#228;");
