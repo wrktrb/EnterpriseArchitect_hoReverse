@@ -327,39 +327,41 @@ namespace EaServices.Doors.ReqIfs
             {
                 if (el.Scenarios == null || el.Scenarios.Count == 0) return "";
                 var sb = new System.Text.StringBuilder();
-                sb.Append("<p><b>Scenarios</b></p>");
+                sb.Append("<p><b>Scenarios</b></p>\n");
                 foreach (EA.Scenario scenario in el.Scenarios)
                 {
                     string title = String.IsNullOrWhiteSpace(scenario.Type)
                         ? scenario.Name
                         : $"{scenario.Type}: {scenario.Name}";
-                    sb.Append($"<p><b>{HtmlEncode(title)}</b></p>");
+                    sb.Append($"<p><b>{HtmlEncode(title)}</b></p>\n");
                     if (!String.IsNullOrWhiteSpace(scenario.Notes))
-                        sb.Append(Rep.GetFormatFromField("HTML", scenario.Notes));
+                        sb.Append(Rep.GetFormatFromField("HTML", scenario.Notes)).Append("\n");
 
                     var steps = new System.Collections.Generic.List<EA.ScenarioStep>();
                     foreach (EA.ScenarioStep step in scenario.Steps) steps.Add(step);
                     if (steps.Count == 0) continue;
 
-                    sb.Append("<ol>");
+                    // One paragraph per step with the step number as text and a real line break,
+                    // so the steps stay on separate lines also if a tool reads only the text of the XHTML
+                    int stepNo = 0;
                     foreach (var step in steps.OrderBy(x => x.Pos))
                     {
+                        stepNo++;
                         string who = step.StepType.ToString().IndexOf("Actor", StringComparison.OrdinalIgnoreCase) >= 0
                             ? "Context"
                             : "System";
-                        var text = new System.Text.StringBuilder($"[{who}] {HtmlEncode(step.Name)}");
-                        if (!String.IsNullOrWhiteSpace(step.Uses)) text.Append($"<br/>Uses: {HtmlEncode(step.Uses)}");
-                        if (!String.IsNullOrWhiteSpace(step.Results)) text.Append($"<br/>Results: {HtmlEncode(step.Results)}");
-                        if (!String.IsNullOrWhiteSpace(step.State)) text.Append($"<br/>State: {HtmlEncode(step.State)}");
+                        var text = new System.Text.StringBuilder($"{stepNo}. [{who}] {HtmlEncode(step.Name)}");
+                        if (!String.IsNullOrWhiteSpace(step.Uses)) text.Append($"<br/>\nUses: {HtmlEncode(step.Uses)}");
+                        if (!String.IsNullOrWhiteSpace(step.Results)) text.Append($"<br/>\nResults: {HtmlEncode(step.Results)}");
+                        if (!String.IsNullOrWhiteSpace(step.State)) text.Append($"<br/>\nState: {HtmlEncode(step.State)}");
                         foreach (EA.ScenarioExtension ext in step.Extensions)
                         {
-                            text.Append($"<br/>Extension {HtmlEncode(ext.Level)}");
+                            text.Append($"<br/>\nExtension {HtmlEncode(ext.Level)}");
                             string extName = GetExtensionScenarioName(ext);
                             if (extName != "") text.Append($": {HtmlEncode(extName)}");
                         }
-                        sb.Append($"<li>{text}</li>");
+                        sb.Append($"<p>{text}</p>\n");
                     }
-                    sb.Append("</ol>");
                 }
                 return sb.ToString();
             }
@@ -393,7 +395,7 @@ namespace EaServices.Doors.ReqIfs
 
         private static string HtmlEncode(string text)
         {
-            return System.Net.WebUtility.HtmlEncode((text ?? "").Trim()).Replace("\r\n", "<br/>").Replace("\n", "<br/>");
+            return System.Net.WebUtility.HtmlEncode((text ?? "").Trim()).Replace("\r\n", "\n").Replace("\n", "<br/>\n");
         }
 
         /// <summary>
@@ -526,8 +528,8 @@ namespace EaServices.Doors.ReqIfs
 
         private static string XhtmlToText(string xhtml)
         {
-            string text = Regex.Replace(xhtml, @"<(\w+:)?br\s*/?>", "\n", RegexOptions.IgnoreCase);
-            text = Regex.Replace(text, @"</(\w+:)?(p|div|li|h\d)>", "\n", RegexOptions.IgnoreCase);
+            string text = Regex.Replace(xhtml, @"<(\w+:)?br\s*/?>\r?\n?", "\n", RegexOptions.IgnoreCase);
+            text = Regex.Replace(text, @"</(\w+:)?(p|div|li|h\d)>\r?\n?", "\n", RegexOptions.IgnoreCase);
             text = Regex.Replace(text, @"<(\w+:)?li[^>]*>", "- ", RegexOptions.IgnoreCase);
             text = Regex.Replace(text, @"<[^>]+>", "");
             text = System.Net.WebUtility.HtmlDecode(text);
