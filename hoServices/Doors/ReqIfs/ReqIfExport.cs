@@ -353,7 +353,9 @@ namespace EaServices.Doors.ReqIfs
                         if (!String.IsNullOrWhiteSpace(step.State)) text.Append($"<br/>State: {HtmlEncode(step.State)}");
                         foreach (EA.ScenarioExtension ext in step.Extensions)
                         {
-                            text.Append($"<br/>Extension {HtmlEncode(ext.Level)}: {HtmlEncode(ext.Name)}");
+                            text.Append($"<br/>Extension {HtmlEncode(ext.Level)}");
+                            string extName = GetExtensionScenarioName(ext);
+                            if (extName != "") text.Append($": {HtmlEncode(extName)}");
                         }
                         sb.Append($"<li>{text}</li>");
                     }
@@ -366,6 +368,25 @@ namespace EaServices.Doors.ReqIfs
                 MessageBox.Show($@"Element: '{el.Name}'
 
 {e}", @"Error exporting scenarios, scenarios skipped");
+                return "";
+            }
+        }
+
+        /// <summary>
+        /// Name of the alternate/exception scenario an extension leads to (late bound, "" if not available)
+        /// </summary>
+        /// <param name="ext"></param>
+        /// <returns></returns>
+        private static string GetExtensionScenarioName(EA.ScenarioExtension ext)
+        {
+            try
+            {
+                dynamic scenario = ((dynamic)ext).Scenario;
+                if (scenario == null) return "";
+                return (string)scenario.Name ?? "";
+            }
+            catch
+            {
                 return "";
             }
         }
