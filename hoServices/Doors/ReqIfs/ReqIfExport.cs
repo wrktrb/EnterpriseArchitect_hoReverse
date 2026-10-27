@@ -53,6 +53,8 @@ namespace EaServices.Doors.ReqIfs
         private const string MacroParentName = "EA.ParentName";
         private const string MacroParentGuids = "EA.ParentGuids";
         private const string MacroParentPath = "EA.ParentPath";
+        // PackageIDs to export: the package, and with 'IncludeSubPackages' all sub-packages (recursive)
+        private System.Collections.Generic.List<int> _packageIds = new System.Collections.Generic.List<int>();
         // true: Note elements are exported as attribute of the linked element, not as own requirement
         private bool _skipNoteElements;
 
@@ -103,6 +105,8 @@ namespace EaServices.Doors.ReqIfs
             _exportFields = new ExportFields(Settings.WriteAttrNameList);
             _exportMapping = new ExportFields(GetExportMappings());
             _skipNoteElements = _exportMapping.GetFields().Any(x => _exportMapping.GetMacroName(x) == MacroLinkedNotes);
+            _packageIds = new System.Collections.Generic.List<int>();
+            CollectPackageIds(Pkg, _packageIds, Settings.IncludeSubPackages);
 
             // Write header, delete file if first package
             ReqIfDeserialized = AddHeader(ImportModuleFile, newFile:subModuleIndex==0);
@@ -120,7 +124,12 @@ namespace EaServices.Doors.ReqIfs
             string fileReqIf = Path.Combine(Zip.CreateTempDir(), Path.GetFileName(ImportModuleFile));
             SerializeReqIf(fileReqIf, compress:false);
 
-           return  Compress(ImportModuleFile, Path.GetDirectoryName(fileReqIf),Settings.EmbeddedFileStorageDictionary);
+            if (!Compress(ImportModuleFile, Path.GetDirectoryName(fileReqIf), Settings.EmbeddedFileStorageDictionary)) return false;
+
+            // Optional csv export. The ReqIF content contains all modules exported so far,
+            // so the csv is re-written for each module and is complete after the last one.
+            if (!String.IsNullOrWhiteSpace(Settings.CsvExportFile)) return WriteCsv(Settings.CsvExportFile);
+            return true;
 
 
         }
@@ -344,30 +353,183 @@ namespace EaServices.Doors.ReqIfs
         }
 
         /// <summary>
+        /// Write all exported requirements as csv:
+        /// - One row per requirement in hierarchy order
+        /// - Columns: Specification, Level, then all ReqIF attributes (union over all modules)
+        /// - UTF-8 with BOM, all values quoted, XHTML converted to plain text
+        /// </summary>
+        /// <param name="csvFile"></param>
+        /// <returns></returns>
+        private bool WriteCsv(string csvFile)
+        {
+            try
+            {
+                string del = Settings.CsvDelimiter;
+                var columns = new System.Collections.Generic.List<string>();
+                foreach (var specType in _reqIfContent.SpecTypes.OfType<SpecObjectType>())
+                {
+                    foreach (var attr in specType.SpecAttributes)
+                    {
+                        if (!columns.Contains(attr.LongName)) columns.Add(attr.LongName);
+                    }
+                }
+
+                var sb = new System.Text.StringBuilder();
+                var header = new[] {"Specification", "Level"}.Concat(columns);
+                sb.Append(String.Join(del, header.Select(CsvQuote))).Append("\r\n");
+
+                foreach (var spec in _reqIfContent.Specifications)
+                {
+                    AddCsvRows(sb, del, columns, spec.LongName, spec.Children, 1);
+                }
+
+                string dir = Path.GetDirectoryName(csvFile);
+                if (!String.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+                File.WriteAllText(csvFile, sb.ToString(), new System.Text.UTF8Encoding(true));
+                return true;
+            }
+            catch (Exception e)
+            {
+                MessageBox.Show($@"CSV file: '{csvFile}'
+
+{e}", @"Error writing csv export (file open in Excel?)");
+                return false;
+            }
+        }
+
+        private void AddCsvRows(System.Text.StringBuilder sb, string del,
+            System.Collections.Generic.List<string> columns, string specName,
+            System.Collections.Generic.IEnumerable<SpecHierarchy> hierarchies, int level)
+        {
+            foreach (var h in hierarchies)
+            {
+                if (h.Object != null)
+                {
+                    var values = new System.Collections.Generic.Dictionary<string, string>();
+                    foreach (var v in h.Object.Values)
+                    {
+                        string name = v.AttributeDefinition?.LongName;
+                        if (name != null && !values.ContainsKey(name)) values[name] = CsvValue(v);
+                    }
+                    var row = new[] {specName, level.ToString()}
+                        .Concat(columns.Select(c => values.TryGetValue(c, out var val) ? val : ""));
+                    sb.Append(String.Join(del, row.Select(CsvQuote))).Append("\r\n");
+                }
+                AddCsvRows(sb, del, columns, specName, h.Children, level + 1);
+            }
+        }
+
+        private static string CsvValue(AttributeValue v)
+        {
+            object o;
+            try
+            {
+                o = v.ObjectValue;
+            }
+            catch
+            {
+                return "";
+            }
+            if (o == null) return "";
+            if (o is System.Collections.Generic.List<EnumValue> enums)
+                return String.Join(", ", enums.Select(x => x.LongName));
+            if (o is DateTime date) return date.ToString("yyyy-MM-dd HH:mm:ss");
+            if (o is bool b) return b ? "true" : "false";
+            if (v is AttributeValueXHTML) return XhtmlToText(o.ToString());
+            return o.ToString();
+        }
+
+        private static string XhtmlToText(string xhtml)
+        {
+            string text = Regex.Replace(xhtml, @"<(\w+:)?br\s*/?>", "\n", RegexOptions.IgnoreCase);
+            text = Regex.Replace(text, @"</(\w+:)?(p|div|li|h\d)>", "\n", RegexOptions.IgnoreCase);
+            text = Regex.Replace(text, @"<(\w+:)?li[^>]*>", "- ", RegexOptions.IgnoreCase);
+            text = Regex.Replace(text, @"<[^>]+>", "");
+            text = System.Net.WebUtility.HtmlDecode(text);
+            text = Regex.Replace(text, @"[ \t]+\n", "\n");
+            text = Regex.Replace(text, @"\n{3,}", "\n\n");
+            return text.Trim();
+        }
+
+        private static string CsvQuote(string value)
+        {
+            return $"\"{(value ?? "").Replace("\"", "\"\"")}\"";
+        }
+
+        /// <summary>
         /// Create Specification with hierarchy
         /// </summary>
         private bool CreateSpecHierarchy()
         {
-            var parent = _moduleSpecification;
-            foreach (EA.Element el in Pkg.Elements)
+            AddPackageToHierarchy(_moduleSpecification.Children, Pkg);
+            return true;
+        }
+
+        /// <summary>
+        /// Add the content of a package to the hierarchy:
+        /// - With 'IncludeSubPackages': sub-packages first (like the EA Project Browser), as heading with their content below
+        /// - Elements of the package (nested elements below their parent)
+        /// </summary>
+        /// <param name="children"></param>
+        /// <param name="pkg"></param>
+        private void AddPackageToHierarchy(System.Collections.Generic.ICollection<SpecHierarchy> children, EA.Package pkg)
+        {
+            if (Settings.IncludeSubPackages)
+            {
+                foreach (EA.Package subPkg in pkg.Packages)
+                {
+                    EA.Element pkgElement = subPkg.Element;
+                    if (pkgElement == null) continue;
+                    var specHierarchy = MakeSpecHierarchy(pkgElement);
+                    children.Add(specHierarchy);
+                    AddPackageToHierarchy(specHierarchy.Children, subPkg);
+                }
+            }
+            foreach (EA.Element el in pkg.Elements)
             {
                 if (_skipNoteElements && el.Type == "Note") continue;
-                var idSpecObject = ReqIfUtils.MakeReqIfId(ReqIfUtils.ReqIfIdType.SpecObject, ReqIfUtils.IdFromGuid(el.ElementGUID));
-                var specObject =_reqIfContent.SpecObjects.SingleOrDefault(x => x.Identifier == idSpecObject);
-                var specHierarchy = new SpecHierarchy()
-                {   Identifier = ReqIfUtils.MakeReqIfId(ReqIfUtils.ReqIfIdType.SpecHierarchy, ReqIfUtils.IdFromGuid(el.ElementGUID)),
-                    LastChange = el.Modified,
-                    LongName = el.Name,
-                    Object = specObject
-                };
-                parent.Children.Add(specHierarchy);
+                var specHierarchy = MakeSpecHierarchy(el);
+                children.Add(specHierarchy);
                 foreach (EA.Element child in el.Elements)
                 {
                     CreateSpecHierarchyElement(specHierarchy, child);
                 }
             }
+        }
 
-            return true;
+        /// <summary>
+        /// Make a SpecHierarchy for the element (or package element) with the link to its SpecObject
+        /// </summary>
+        /// <param name="el"></param>
+        /// <returns></returns>
+        private SpecHierarchy MakeSpecHierarchy(EA.Element el)
+        {
+            var idSpecObject = ReqIfUtils.MakeReqIfId(ReqIfUtils.ReqIfIdType.SpecObject, ReqIfUtils.IdFromGuid(el.ElementGUID));
+            var specObject = _reqIfContent.SpecObjects.SingleOrDefault(x => x.Identifier == idSpecObject);
+            return new SpecHierarchy()
+            {
+                Identifier = ReqIfUtils.MakeReqIfId(ReqIfUtils.ReqIfIdType.SpecHierarchy, ReqIfUtils.IdFromGuid(el.ElementGUID)),
+                LastChange = el.Modified,
+                LongName = el.Name,
+                Object = specObject
+            };
+        }
+
+        /// <summary>
+        /// Collect the PackageID of the package and, if wanted, of all its sub-packages (recursive)
+        /// </summary>
+        /// <param name="pkg"></param>
+        /// <param name="ids"></param>
+        /// <param name="recursive"></param>
+        private static void CollectPackageIds(EA.Package pkg, System.Collections.Generic.List<int> ids, bool recursive)
+        {
+            if (ids.Contains(pkg.PackageID)) return;
+            ids.Add(pkg.PackageID);
+            if (!recursive) return;
+            foreach (EA.Package subPkg in pkg.Packages)
+            {
+                CollectPackageIds(subPkg, ids, true);
+            }
         }
         /// <summary>
         /// Create a SpecHierarchy with the link to the SpecObject
@@ -406,7 +568,7 @@ namespace EaServices.Doors.ReqIfs
                 // Read all Requirements for module/specification
                 var reqs = (from r in db.t_object
                             join pkg in db.t_package on r.Package_ID equals pkg.Package_ID
-                            where pkg.ea_guid == Pkg.PackageGUID &&
+                            where _packageIds.Contains(pkg.Package_ID) &&
                                   !(_skipNoteElements && r.Object_Type == "Note")
                             from tv in db.t_objectproperties.Where(tv2 => r.Object_ID == tv2.Object_ID)
                                 .DefaultIfEmpty() // <<= makes join left join
@@ -722,7 +884,7 @@ Value:    {attrValue}
                     join o in db.t_object on tv.Object_ID equals o.Object_ID
                     join p in db.t_package on o.Package_ID equals p.Package_ID
                     join tvType in db.t_propertytypes on tv.Property equals tvType.Property
-                    where p.ea_guid == pkg.PackageGUID && tvType.Notes.Contains("Values=") && 
+                    where _packageIds.Contains(p.Package_ID) && tvType.Notes.Contains("Values=") && 
                                                            (tvType.Notes.Contains("Type=Enum") || tvType.Notes.Contains("Type=CheckList"))
                     orderby tvType.Property
                     group tvType by new { Property = tvType.Property, Notes = tvType.Notes.Substring(0) } into grp  //, tvType.Notes
@@ -958,7 +1120,7 @@ All EA Tagged Values starting with 'ReqIF.' are skipped!", @"Don't use ReqIF sta
                 var tvs = (from tv in db.t_objectproperties
                 join o in db.t_object on tv.Object_ID equals o.Object_ID
                 join p in db.t_package on o.Package_ID equals p.Package_ID
-                where p.ea_guid == pkg.PackageGUID
+                where _packageIds.Contains(p.Package_ID)
                 orderby tv.Property
                 //group tv by new { tv.Property, tv.PropertyID} into grp
                 select tv.Property).Distinct();
