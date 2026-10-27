@@ -116,6 +116,14 @@ namespace EaServices.Doors
         [JsonProperty("ExportScenarios"), DefaultValue(false)]
         public bool ExportScenarios { get; set; }
 
+        /// <summary>
+        /// Export: Name of the ReqIF SpecObjectType (requirement type), e.g. "REQUIREMENT".
+        /// Empty (default): derived from the package name, made safe for StrictDoc:
+        /// only uppercase letters and '_' (StrictDoc grammar: [A-Z]+(_[A-Z]+)*), e.g. "C4G-C1" => "C_G_C"
+        /// </summary>
+        [JsonProperty("SpecObjectTypeName")]
+        public string SpecObjectTypeName { get; set; }
+
 
         /// <summary>
         /// Allowed operations according to <see cref="AllowedOperationsType"/>
