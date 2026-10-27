@@ -101,6 +101,14 @@ namespace EaServices.Doors
         [JsonProperty("UseMariGold"), DefaultValue("true")]
         public bool UseMariGold { get; set; }
 
+        /// <summary>
+        /// Export: Include all sub-packages (recursive) into the ReqIF specification of the package.
+        /// Each sub-package becomes a heading with its elements nested below.
+        /// - False (default): Only the elements directly in the package are exported
+        /// </summary>
+        [JsonProperty("IncludeSubPackages"), DefaultValue(false)]
+        public bool IncludeSubPackages { get; set; }
+
 
         /// <summary>
         /// Allowed operations according to <see cref="AllowedOperationsType"/>
@@ -162,6 +170,33 @@ namespace EaServices.Doors
         }
         [JsonProperty("ExportFile")]
         private string _exportFile;
+
+        /// <summary>
+        /// Optional: Additionally write the exported requirements as *.csv (same columns as ReqIF).
+        /// Empty: no csv export.
+        ///
+        /// Example: "c:/Temp/ReqIF/export.csv"
+        /// </summary>
+        [JsonIgnore]
+        public string CsvExportFile
+        {
+            get => _csvExportFile?.Replace(@"\", "/");
+            set => _csvExportFile = value;
+        }
+        [JsonProperty("CsvExportFile")]
+        private string _csvExportFile;
+
+        /// <summary>
+        /// Delimiter for the csv export (default ';', what Excel expects with German regional settings)
+        /// </summary>
+        [JsonIgnore]
+        public string CsvDelimiter
+        {
+            get => String.IsNullOrEmpty(_csvDelimiter) ? ";" : _csvDelimiter;
+            set => _csvDelimiter = value;
+        }
+        [JsonProperty("CsvDelimiter")]
+        private string _csvDelimiter;
 
         /// <summary>
         /// The file to export. The default is the input file name with "_Export" at the end
