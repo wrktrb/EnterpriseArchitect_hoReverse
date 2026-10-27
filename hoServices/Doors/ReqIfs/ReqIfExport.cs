@@ -44,11 +44,12 @@ namespace EaServices.Doors.ReqIfs
         // Macros to export the elements linked by a «trace» relationship (both directions)
         private const string MacroTraceIds = "EA.TraceIds";       // EA Element ID, e.g. "123, 456"
         private const string MacroTraceGuids = "EA.TraceGuids";   // EA GUID
-        // Macros to export the elements the current element is nested in (EA ParentID)
-        // - EA.ParentGuid:  GUID of the direct parent element (empty if the element is directly in the package)
-        // - EA.ParentName:  Name of the direct parent element
-        // - EA.ParentGuids: GUIDs of all parent elements, outermost first
-        // - EA.ParentPath:  Names of all parent elements, outermost first, e.g. "System / Subsystem / Function"
+        // Macros to export the containers of the current element: nesting elements (EA ParentID) and
+        // packages up to the exported package
+        // - EA.ParentGuid:  GUID of the direct parent (element, or package if not nested)
+        // - EA.ParentName:  Name of the direct parent
+        // - EA.ParentGuids: GUIDs of all parents, outermost first
+        // - EA.ParentPath:  Names of all parents, outermost first, e.g. "C4G-C1 / Use Cases / System / Function"
         private const string MacroParentGuid = "EA.ParentGuid";
         private const string MacroParentName = "EA.ParentName";
         private const string MacroParentGuids = "EA.ParentGuids";
@@ -273,15 +274,20 @@ namespace EaServices.Doors.ReqIfs
         }
 
         /// <summary>
-        /// Get all elements the element is nested in (EA ParentID), outermost first.
-        /// Packages are not included.
+        /// Get all containers of the element, outermost first, as (GUID, Name):
+        /// - the exported package (root) and the sub-packages down to the element's package
+        /// - the elements the element is nested in (EA ParentID)
+        /// Packages above the exported package are not included.
         /// </summary>
         /// <param name="el"></param>
         /// <returns></returns>
-        private System.Collections.Generic.List<EA.Element> GetParentElements(EA.Element el)
+        private System.Collections.Generic.List<System.Collections.Generic.KeyValuePair<string, string>> GetParentElements(EA.Element el)
         {
-            var parents = new System.Collections.Generic.List<EA.Element>();
+            var parents = new System.Collections.Generic.List<System.Collections.Generic.KeyValuePair<string, string>>();
+
+            // nested elements
             var seen = new System.Collections.Generic.HashSet<int> { el.ElementID };
+            int packageId = el.PackageID;
             int parentId = el.ParentID;
             while (parentId > 0 && seen.Add(parentId))
             {
@@ -295,8 +301,28 @@ namespace EaServices.Doors.ReqIfs
                     break;
                 }
                 if (parent == null) break;
-                parents.Insert(0, parent);
+                parents.Insert(0, new System.Collections.Generic.KeyValuePair<string, string>(parent.ElementGUID, parent.Name));
+                packageId = parent.PackageID;
                 parentId = parent.ParentID;
+            }
+
+            // packages up to the exported package
+            var seenPkg = new System.Collections.Generic.HashSet<int>();
+            while (packageId > 0 && seenPkg.Add(packageId))
+            {
+                EA.Package pkg;
+                try
+                {
+                    pkg = Rep.GetPackageByID(packageId);
+                }
+                catch
+                {
+                    break;
+                }
+                if (pkg == null) break;
+                parents.Insert(0, new System.Collections.Generic.KeyValuePair<string, string>(pkg.PackageGUID, pkg.Name));
+                if (pkg.PackageID == Pkg.PackageID) break;   // exported package reached
+                packageId = pkg.ParentID;
             }
             return parents;
         }
@@ -428,13 +454,13 @@ namespace EaServices.Doors.ReqIfs
                 case "EA.GUID":
                     return MakeXhtmlFromString(GuidWithoutBraces(el.ElementGUID));
                 case MacroParentGuid:
-                    return MakeXhtmlFromString(GetParentElements(el).Select(x => GuidWithoutBraces(x.ElementGUID)).LastOrDefault() ?? "");
+                    return MakeXhtmlFromString(GetParentElements(el).Select(x => GuidWithoutBraces(x.Key)).LastOrDefault() ?? "");
                 case MacroParentName:
-                    return MakeXhtmlFromString(GetParentElements(el).Select(x => x.Name).LastOrDefault() ?? "");
+                    return MakeXhtmlFromString(GetParentElements(el).Select(x => x.Value).LastOrDefault() ?? "");
                 case MacroParentGuids:
-                    return MakeXhtmlFromString(String.Join(", ", GetParentElements(el).Select(x => GuidWithoutBraces(x.ElementGUID))));
+                    return MakeXhtmlFromString(String.Join(", ", GetParentElements(el).Select(x => GuidWithoutBraces(x.Key))));
                 case MacroParentPath:
-                    return MakeXhtmlFromString(String.Join(" / ", GetParentElements(el).Select(x => x.Name)));
+                    return MakeXhtmlFromString(String.Join(" / ", GetParentElements(el).Select(x => x.Value)));
             }
             return MakeXhtmlFromString(_exportMapping.GetMacroValue(el, mappedName));
         }
